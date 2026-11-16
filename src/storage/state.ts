@@ -1,6 +1,8 @@
+import { Device } from '@capacitor/device';
 import { AccessoryId, EyeColorId } from '../data/cats';
 
 const SAVE_KEY = 'cat_climber_save_v1';
+const DEVICE_KEY = 'cat_climber_device_id_v1';
 
 export interface ClimberHighscore {
   id: string;
@@ -13,6 +15,8 @@ export interface ClimberHighscore {
 }
 
 export interface ClimberState {
+  deviceId: string;
+  apiBaseUrl: string;
   colorId: number;
   eyeColor: EyeColorId;
   accessory: AccessoryId;
@@ -28,8 +32,42 @@ function makeRunId(): string {
   return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function loadClimberState(): ClimberState {
+function generateFallbackDeviceId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `cc-${crypto.randomUUID()}`;
+  }
+  return `cc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export async function resolveDeviceId(): Promise<string> {
+  const cached = localStorage.getItem(DEVICE_KEY);
+  try {
+    const info = await Device.getId();
+    if (info?.identifier && info.identifier.trim().length >= 4) {
+      const id = `phone-${info.identifier.trim()}`;
+      localStorage.setItem(DEVICE_KEY, id);
+      return id;
+    }
+  } catch {
+    // Web fallback
+  }
+
+  if (cached && cached.trim().length >= 4) {
+    return cached;
+  }
+  const fresh = generateFallbackDeviceId();
+  localStorage.setItem(DEVICE_KEY, fresh);
+  return fresh;
+}
+
+export function loadClimberState(deviceId: string): ClimberState {
+  const defaultApi = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+
   const base: ClimberState = {
+    deviceId,
+    apiBaseUrl: defaultApi,
     colorId: 0,
     eyeColor: 'amber',
     accessory: 'none',
@@ -48,6 +86,11 @@ export function loadClimberState(): ClimberState {
     const currentMeters = Math.max(0, Number(parsed.currentMeters || 0));
     const bestMeters = Math.max(currentMeters, Number(parsed.bestMeters || 0));
     return {
+      deviceId,
+      apiBaseUrl:
+        typeof parsed.apiBaseUrl === 'string' && parsed.apiBaseUrl.trim()
+          ? parsed.apiBaseUrl.trim().replace(/\/+$/, '')
+          : defaultApi,
       colorId: typeof parsed.colorId === 'number' ? parsed.colorId : 0,
       eyeColor: parsed.eyeColor || 'amber',
       accessory: parsed.accessory || 'none',
