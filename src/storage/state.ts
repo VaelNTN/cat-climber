@@ -71,7 +71,7 @@ export function loadClimberState(deviceId: string): ClimberState {
     colorId: 0,
     eyeColor: 'amber',
     accessory: 'none',
-    playerName: 'Kattenbaas',
+    playerName: 'Player',
     soundEnabled: true,
     currentMeters: 0,
     bestMeters: 0,
@@ -85,6 +85,8 @@ export function loadClimberState(deviceId: string): ClimberState {
     const parsed = JSON.parse(raw) as Partial<ClimberState>;
     const currentMeters = Math.max(0, Number(parsed.currentMeters || 0));
     const bestMeters = Math.max(currentMeters, Number(parsed.bestMeters || 0));
+    const rawName = typeof parsed.playerName === 'string' ? parsed.playerName.trim() : '';
+    const resolvedName = rawName && rawName !== 'Kattenbaas' ? rawName : 'Player';
     return {
       deviceId,
       apiBaseUrl:
@@ -94,10 +96,7 @@ export function loadClimberState(deviceId: string): ClimberState {
       colorId: typeof parsed.colorId === 'number' ? parsed.colorId : 0,
       eyeColor: parsed.eyeColor || 'amber',
       accessory: parsed.accessory || 'none',
-      playerName:
-        typeof parsed.playerName === 'string' && parsed.playerName.trim()
-          ? parsed.playerName.trim()
-          : 'Kattenbaas',
+      playerName: resolvedName,
       soundEnabled: parsed.soundEnabled !== false,
       currentMeters,
       bestMeters,
@@ -128,7 +127,7 @@ export function updateClimberHighscore(state: ClimberState): void {
   const idx = state.highscores.findIndex((h) => h.id === state.activeRunId);
   const entry: ClimberHighscore = {
     id: state.activeRunId,
-    playerName: state.playerName.trim() || 'Kattenbaas',
+    playerName: state.playerName.trim() || 'Player',
     meters: rounded,
     colorId: state.colorId,
     eyeColor: state.eyeColor,

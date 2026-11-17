@@ -33,6 +33,8 @@ let stage: ClimberStage | null = null;
 let homeAnimId: number | null = null;
 let syncTimeout: number | null = null;
 let hsPollInterval: number | null = null;
+let hsHeadingTapCount = 0;
+let hsHeadingTapTimer: number | null = null;
 
 function renderCatThumb(
   canvas: HTMLCanvasElement,
@@ -61,48 +63,46 @@ function buildApp(): void {
       <div class="home-hero">
         <canvas id="home-cat-canvas" class="cat-preview-canvas"></canvas>
         <h1 class="game-title">Cat Climber</h1>
-        <p class="game-subtitle">
-          Tap of klik omhoog en klim met jouw kat zo veel mogelijk meters de lucht in!
-        </p>
+        <p class="game-subtitle">Tap fast to climb higher!</p>
         <div id="home-best-pill" class="best-pill hidden"></div>
       </div>
       <div class="home-actions">
         <button id="btn-home-play" class="btn btn-primary">Play</button>
-        <button id="btn-home-options" class="btn btn-secondary">Katopties</button>
-        <button id="btn-home-highscores" class="btn btn-secondary">Highscores</button>
+        <button id="btn-home-options" class="btn btn-secondary">Cat Style</button>
+        <button id="btn-home-highscores" class="btn btn-secondary">Leaderboard</button>
       </div>
     </section>
 
-    <!-- KATOPTIES / KATKLEUR SCREEN -->
+    <!-- CAT STYLE SCREEN -->
     <section id="screen-options" class="screen hidden">
       <div class="top-nav">
-        <button id="btn-options-back" class="btn btn-small">← Terug</button>
-        <h2 id="options-heading" class="screen-heading">Kies je Katkleur</h2>
+        <button id="btn-options-back" class="btn btn-small">← Back</button>
+        <h2 id="options-heading" class="screen-heading">Cat Style</h2>
         <span style="width:60px"></span>
       </div>
 
       <div class="options-scroll">
         <div>
-          <p class="section-label">Jouw Naam (voor Highscores)</p>
-          <input id="player-name-input" class="name-input" type="text" maxlength="20" placeholder="Kattenbaas" />
+          <p class="section-label">Player Name</p>
+          <input id="player-name-input" class="name-input" type="text" maxlength="20" placeholder="Player" />
         </div>
 
         <div>
-          <p class="section-label">Katkleur (kies om te spelen)</p>
+          <p class="section-label">Cat Color</p>
           <div id="cat-color-grid" class="color-grid"></div>
         </div>
 
         <div>
-          <p class="section-label">Oogkleur</p>
+          <p class="section-label">Eye Color</p>
           <div id="eye-chips" class="chip-row"></div>
         </div>
 
         <div>
-          <p class="section-label">Accessoire</p>
+          <p class="section-label">Accessory</p>
           <div id="acc-chips" class="chip-row"></div>
         </div>
 
-        <button id="btn-options-start" class="btn btn-primary" style="margin-top:6px;">Start Klimmen</button>
+        <button id="btn-options-start" class="btn btn-primary" style="margin-top:6px;">Play Now</button>
       </div>
     </section>
 
@@ -111,14 +111,14 @@ function buildApp(): void {
       <div class="game-top-bar">
         <button id="btn-game-menu" class="btn btn-small">← Menu</button>
         <div style="display:flex;gap:8px;">
-          <button id="btn-game-options" class="btn btn-small">Katopties</button>
-          <button id="btn-game-sound" class="btn btn-small">Geluid: Aan</button>
+          <button id="btn-game-options" class="btn btn-small">Cat Style</button>
+          <button id="btn-game-sound" class="btn btn-small">🔊 On</button>
         </div>
       </div>
 
       <div class="meters-hud">
         <div id="meters-value" class="meters-value">0.0 m</div>
-        <div id="meters-best" class="meters-best">Hoogste: 0.0 m</div>
+        <div id="meters-best" class="meters-best">Best: 0.0 m</div>
       </div>
 
       <div class="stage-wrap">
@@ -126,41 +126,40 @@ function buildApp(): void {
       </div>
 
       <div class="game-bottom-bar">
-        <span class="tap-hint">Tap of klik overal om omhoog te klimmen!</span>
-        <button id="btn-new-climb" class="btn btn-small">Nieuwe Klim</button>
+        <span class="tap-hint">Tap anywhere to climb!</span>
+        <button id="btn-new-climb" class="btn btn-small">New Climb</button>
       </div>
     </section>
 
-    <!-- HIGHSCORES SCREEN -->
+    <!-- LEADERBOARD SCREEN -->
     <section id="screen-highscores" class="screen hidden">
       <div class="top-nav">
-        <button id="btn-hs-back" class="btn btn-small">← Terug</button>
-        <h2 class="screen-heading">Highscores</h2>
-        <button id="btn-hs-refresh" class="btn btn-small">Vernieuw</button>
+        <button id="btn-hs-back" class="btn btn-small">← Back</button>
+        <h2 id="hs-heading" class="screen-heading">Leaderboard</h2>
+        <button id="btn-hs-refresh" class="btn btn-small">Refresh</button>
       </div>
 
       <div class="hs-mode-tabs">
-        <button id="btn-hs-global" class="hs-mode-btn active" type="button">🌐 Wereldwijd</button>
-        <button id="btn-hs-local" class="hs-mode-btn" type="button">📱 Mijn Scores</button>
+        <button id="btn-hs-global" class="hs-mode-btn active" type="button">🌐 Global</button>
+        <button id="btn-hs-local" class="hs-mode-btn" type="button">📱 Local</button>
       </div>
 
       <div class="hs-status-bar">
-        <span id="hs-status-text">Verbinden met globale server...</span>
-        <button id="btn-hs-config" class="btn btn-small" type="button">Server</button>
+        <span id="hs-status-text">Connecting...</span>
       </div>
 
       <div id="hs-config-panel" class="hs-config-panel hidden">
         <p class="hs-config-help">
-          Vul de URL van je gedeelde Arcade Highscores Worker in om meters met andere telefoons te delen.
+          Developer endpoint URL for shared scores:
         </p>
         <div class="hs-url-row">
           <input
             id="api-url-input"
             class="name-input"
             type="url"
-            placeholder="https://arcade-highscores-api.workers.dev"
+            placeholder="https://example.com"
           />
-          <button id="btn-save-api-url" class="btn btn-small" type="button">Opslaan</button>
+          <button id="btn-save-api-url" class="btn btn-small" type="button">Save</button>
         </div>
       </div>
 
@@ -196,9 +195,6 @@ function populateOptions(): void {
       state.colorId = c.id;
       saveClimberState(state);
       populateOptions();
-      if (optionsFromPlay) {
-        showScreen('game');
-      }
     });
     grid.appendChild(card);
   }
@@ -245,7 +241,7 @@ function scheduleClimberSync(delayMs = 2500): void {
     syncTimeout = null;
     void submitGlobalClimberScore(state.apiBaseUrl, {
       deviceId: state.deviceId,
-      playerName: state.playerName,
+      playerName: state.playerName.trim() || 'Player',
       meters: state.bestMeters,
       colorId: state.colorId,
       eyeColor: state.eyeColor,
@@ -277,9 +273,7 @@ function showScreen(target: ScreenName): void {
     stopHomePreview();
     stopGameStage();
     populateOptions();
-    document.getElementById('options-heading')!.textContent = optionsFromPlay
-      ? 'Kies je Katkleur'
-      : 'Katopties';
+    document.getElementById('options-heading')!.textContent = 'Cat Style';
   } else if (target === 'game') {
     stopHighscorePolling();
     stopHomePreview();
@@ -287,6 +281,7 @@ function showScreen(target: ScreenName): void {
   } else if (target === 'highscores') {
     stopHomePreview();
     stopGameStage();
+    document.getElementById('hs-config-panel')!.classList.add('hidden');
     void loadHighscores();
     startHighscorePolling();
   }
@@ -295,7 +290,7 @@ function showScreen(target: ScreenName): void {
 function refreshHome(): void {
   const pill = document.getElementById('home-best-pill')!;
   if (state.bestMeters > 0) {
-    pill.textContent = `Hoogste klim: ${state.bestMeters.toFixed(1)} m`;
+    pill.textContent = `Best Climb: ${state.bestMeters.toFixed(1)} m`;
     pill.classList.remove('hidden');
   } else {
     pill.classList.add('hidden');
@@ -347,14 +342,14 @@ function stopHomePreview(): void {
 
 function updateMetersHud(): void {
   document.getElementById('meters-value')!.textContent = `${state.currentMeters.toFixed(1)} m`;
-  document.getElementById('meters-best')!.textContent = `Hoogste: ${state.bestMeters.toFixed(1)} m`;
+  document.getElementById('meters-best')!.textContent = `Best: ${state.bestMeters.toFixed(1)} m`;
 }
 
 function startGameStage(): void {
   updateMetersHud();
   document.getElementById('btn-game-sound')!.textContent = state.soundEnabled
-    ? 'Geluid: Aan'
-    : 'Geluid: Uit';
+    ? '🔊 On'
+    : '🔇 Off';
 
   const canvas = document.getElementById('climber-canvas') as HTMLCanvasElement;
   const appearance = {
@@ -403,23 +398,23 @@ async function loadHighscores(): Promise<void> {
   apiInput.value = state.apiBaseUrl;
 
   if (hsMode === 'local') {
-    statusEl.textContent = `Lokale geschiedenis (${state.highscores.length} klimsessies)`;
+    statusEl.textContent = `Local History (${state.highscores.length} climbs)`;
     renderLocalHighscores();
     return;
   }
 
   if (!state.apiBaseUrl) {
-    statusEl.textContent = 'Geen server ingesteld (tik Server om URL in te vullen)';
+    statusEl.textContent = 'Offline Mode — Local Records';
     renderLocalHighscores();
     return;
   }
 
-  statusEl.textContent = 'Wereldwijde scores laden...';
+  statusEl.textContent = 'Connecting...';
   try {
     if (state.bestMeters > 0) {
       await submitGlobalClimberScore(state.apiBaseUrl, {
         deviceId: state.deviceId,
-        playerName: state.playerName,
+        playerName: state.playerName.trim() || 'Player',
         meters: state.bestMeters,
         colorId: state.colorId,
         eyeColor: state.eyeColor,
@@ -427,10 +422,10 @@ async function loadHighscores(): Promise<void> {
       });
     }
     const res = await fetchGlobalClimberHighscores(state.apiBaseUrl, state.deviceId, 50);
-    statusEl.textContent = `Live verbonden • ${res.entries.length} klimmers wereldwijd`;
+    statusEl.textContent = `Live • ${res.entries.length} players worldwide`;
     renderGlobalHighscores(res.entries);
   } catch {
-    statusEl.textContent = 'Server niet bereikbaar (offline weergave)';
+    statusEl.textContent = 'Offline Mode — Local Records';
     renderLocalHighscores();
   }
 }
@@ -438,7 +433,7 @@ async function loadHighscores(): Promise<void> {
 function renderGlobalHighscores(entries: GlobalClimberEntry[]): void {
   const list = document.getElementById('hs-list')!;
   if (entries.length === 0) {
-    list.innerHTML = `<div class="empty-msg">Nog geen online hoogtes! Tap op je kat in Cat Climber om als eerste meters te maken.</div>`;
+    list.innerHTML = `<div class="empty-msg">No climbs yet! Play Cat Climber to set the first height.</div>`;
     return;
   }
 
@@ -472,7 +467,7 @@ function renderGlobalHighscores(entries: GlobalClimberEntry[]): void {
     info.className = 'hs-info';
     const name = document.createElement('div');
     name.className = 'hs-name';
-    name.textContent = isMe ? `${item.playerName} (Jij)` : item.playerName;
+    name.textContent = isMe ? `${item.playerName} (You)` : item.playerName;
     const sub = document.createElement('div');
     sub.className = 'hs-sub';
     sub.textContent = getCatColor(item.colorId).name;
@@ -494,7 +489,7 @@ function renderGlobalHighscores(entries: GlobalClimberEntry[]): void {
 function renderLocalHighscores(): void {
   const list = document.getElementById('hs-list')!;
   if (state.highscores.length === 0) {
-    list.innerHTML = `<div class="empty-msg">Nog geen hoogtes! Tap op je kat in Cat Climber om meters te maken.</div>`;
+    list.innerHTML = `<div class="empty-msg">No climbs yet! Play Cat Climber to set a record.</div>`;
     return;
   }
 
@@ -565,8 +560,7 @@ function stopHighscorePolling(): void {
 function wireEvents(): void {
   document.getElementById('btn-home-play')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    optionsFromPlay = true;
-    showScreen('options');
+    showScreen('game');
   });
 
   document.getElementById('btn-home-options')!.addEventListener('click', () => {
@@ -582,7 +576,7 @@ function wireEvents(): void {
 
   document.getElementById('btn-options-back')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    showScreen('home');
+    showScreen(optionsFromPlay ? 'game' : 'home');
   });
 
   document.getElementById('btn-options-start')!.addEventListener('click', () => {
@@ -591,7 +585,7 @@ function wireEvents(): void {
   });
 
   document.getElementById('player-name-input')!.addEventListener('input', (ev) => {
-    state.playerName = (ev.target as HTMLInputElement).value;
+    state.playerName = (ev.target as HTMLInputElement).value.slice(0, 20);
     saveClimberState(state);
   });
 
@@ -602,7 +596,7 @@ function wireEvents(): void {
 
   document.getElementById('btn-game-options')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    optionsFromPlay = false;
+    optionsFromPlay = true;
     showScreen('options');
   });
 
@@ -612,8 +606,8 @@ function wireEvents(): void {
     saveClimberState(state);
     soundFX.playUiTap();
     document.getElementById('btn-game-sound')!.textContent = state.soundEnabled
-      ? 'Geluid: Aan'
-      : 'Geluid: Uit';
+      ? '🔊 On'
+      : '🔇 Off';
   });
 
   document.getElementById('btn-new-climb')!.addEventListener('click', () => {
@@ -646,9 +640,19 @@ function wireEvents(): void {
     void loadHighscores();
   });
 
-  document.getElementById('btn-hs-config')!.addEventListener('click', () => {
-    soundFX.playUiTap();
-    document.getElementById('hs-config-panel')!.classList.toggle('hidden');
+  document.getElementById('hs-heading')!.addEventListener('click', () => {
+    hsHeadingTapCount += 1;
+    if (hsHeadingTapTimer !== null) {
+      window.clearTimeout(hsHeadingTapTimer);
+    }
+    if (hsHeadingTapCount >= 5) {
+      hsHeadingTapCount = 0;
+      document.getElementById('hs-config-panel')!.classList.toggle('hidden');
+    } else {
+      hsHeadingTapTimer = window.setTimeout(() => {
+        hsHeadingTapCount = 0;
+      }, 1500);
+    }
   });
 
   document.getElementById('btn-save-api-url')!.addEventListener('click', () => {

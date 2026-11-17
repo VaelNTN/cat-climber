@@ -1,10 +1,11 @@
 :root {
-  --bg: #0b1120;
-  --surface: rgba(15, 23, 42, 0.82);
-  --border: rgba(148, 163, 184, 0.22);
-  --text: #f8fafc;
-  --muted: #94a3b8;
+  --bg: #042f2e;
+  --surface: rgba(6, 44, 42, 0.84);
+  --border: rgba(45, 212, 191, 0.28);
+  --text: #f0fdfa;
+  --muted: #99f6e4;
   --amber: #fbbf24;
+  --teal: #2dd4bf;
   --sky: #38bdf8;
 }
 
@@ -14,6 +15,12 @@
   user-select: none;
 }
 
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 html,
 body {
   margin: 0;
@@ -21,7 +28,7 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: radial-gradient(circle at 50% 20%, #1e293b 0%, var(--bg) 75%);
+  background: radial-gradient(circle at 50% 18%, #0f766e 0%, var(--bg) 78%);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   touch-action: manipulation;
@@ -38,8 +45,8 @@ body {
   inset: 0;
   display: flex;
   flex-direction: column;
-  padding-top: env(safe-area-inset-top, 12px);
-  padding-bottom: env(safe-area-inset-bottom, 12px);
+  padding-top: max(12px, env(safe-area-inset-top, 12px));
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
@@ -52,7 +59,7 @@ body {
 .home-screen {
   align-items: center;
   justify-content: space-between;
-  padding: 28px 22px;
+  padding: max(24px, env(safe-area-inset-top, 24px)) 22px max(24px, env(safe-area-inset-bottom, 24px));
 }
 
 .home-hero {
@@ -90,7 +97,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   font-size: 0.85rem;
-  color: var(--sky);
+  color: var(--teal);
   font-weight: 700;
 }
 
@@ -121,9 +128,9 @@ body {
 .btn-primary {
   height: 54px;
   font-size: 1.12rem;
-  color: #031320;
-  background: linear-gradient(135deg, #7dd3fc 0%, #0ea5e9 100%);
-  box-shadow: 0 8px 24px rgba(14, 165, 233, 0.32);
+  color: #022c22;
+  background: linear-gradient(135deg, #34d399 0%, #0d9488 100%);
+  box-shadow: 0 8px 24px rgba(20, 184, 166, 0.34);
 }
 
 .btn-secondary {
@@ -200,8 +207,8 @@ body {
 }
 
 .color-card.selected {
-  border-color: var(--sky);
-  background: rgba(56, 189, 248, 0.16);
+  border-color: var(--teal);
+  background: rgba(45, 212, 191, 0.18);
 }
 
 .color-card canvas {
@@ -233,9 +240,9 @@ body {
 }
 
 .chip-btn.selected {
-  border-color: var(--sky);
-  background: rgba(56, 189, 248, 0.2);
-  color: #bae6fd;
+  border-color: var(--teal);
+  background: rgba(45, 212, 191, 0.2);
+  color: #ccfbf1;
 }
 
 .name-input {
@@ -249,6 +256,7 @@ body {
   font-size: 0.95rem;
   outline: none;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Game Screen */
@@ -368,7 +376,7 @@ body {
 .hs-score {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 800;
-  color: var(--sky);
+  color: var(--teal);
   font-size: 0.95rem;
 }
 
@@ -397,9 +405,9 @@ body {
 }
 
 .hs-mode-btn.active {
-  border-color: var(--sky);
-  background: rgba(56, 189, 248, 0.2);
-  color: #bae6fd;
+  border-color: var(--teal);
+  background: rgba(45, 212, 191, 0.2);
+  color: #ccfbf1;
 }
 
 .hs-status-bar {
@@ -420,7 +428,7 @@ body {
   margin: 0 16px 8px;
   padding: 10px 12px;
   border-radius: 14px;
-  background: rgba(15, 23, 42, 0.94);
+  background: rgba(4, 47, 46, 0.95);
   border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -445,6 +453,6 @@ body {
 }
 
 .hs-row.is-me {
-  border-color: var(--sky);
-  background: rgba(56, 189, 248, 0.14);
+  border-color: var(--teal);
+  background: rgba(45, 212, 191, 0.14);
 }
