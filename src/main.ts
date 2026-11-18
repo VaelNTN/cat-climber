@@ -315,7 +315,7 @@ function startHomePreview(): void {
       homeAnimId = null;
       return;
     }
-    const dt = (now - last) / 1000;
+    const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
     last = now;
     phase += dt * 3;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

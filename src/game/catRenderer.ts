@@ -11,6 +11,8 @@ export interface CatRenderOptions {
   phase?: number;
   /** Used for climbing alternating paw reach (-1..1) */
   climbStep?: number;
+  /** Combo heat 0..1 for excited climbing expression */
+  comboHeat?: number;
 }
 
 /**
@@ -24,7 +26,7 @@ export function drawCartoonCat(
   size: number,
   opts: CatRenderOptions
 ): void {
-  const { color, eyeColor, accessory, pose, phase = 0, climbStep = 0 } = opts;
+  const { color, eyeColor, accessory, pose, phase = 0, climbStep = 0, comboHeat = 0 } = opts;
   const s = size;
   const lineW = Math.max(1.8, s * 0.08);
   const eyeHex = getEyeHex(eyeColor);
@@ -35,7 +37,7 @@ export function drawCartoonCat(
   ctx.lineCap = 'round';
 
   // Tail behind body
-  drawTail(ctx, s, lineW, color, pose, phase);
+  drawTail(ctx, s, lineW, color, pose, phase, comboHeat);
 
   // Legs / Hind paws
   drawLegs(ctx, s, lineW, color, pose, climbStep, phase);
@@ -49,6 +51,12 @@ export function drawCartoonCat(
   ctx.ellipse(0, s * 0.92, s * 0.66, s * 0.78, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
+
+  // Subtle highlight
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.16, s * 0.76, s * 0.28, s * 0.44, -0.2, 0, Math.PI * 2);
+  ctx.fill();
 
   // Belly patch
   ctx.fillStyle = color.belly;
@@ -66,7 +74,14 @@ export function drawCartoonCat(
   }
 
   // Head
-  const headTilt = pose === 'falling' ? Math.sin(phase * 6) * 0.14 : pose === 'swinging' ? Math.sin(phase) * 0.06 : 0;
+  const headTilt =
+    pose === 'falling'
+      ? Math.sin(phase * 6) * 0.14
+      : pose === 'climbing'
+      ? climbStep * 0.075
+      : pose === 'swinging'
+      ? Math.sin(phase) * 0.06
+      : 0;
   ctx.save();
   ctx.rotate(headTilt);
 
@@ -101,6 +116,12 @@ export function drawCartoonCat(
   ctx.strokeStyle = color.outline;
   ctx.lineWidth = lineW;
   ctx.stroke();
+
+  // Forehead sheen
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.24, -s * 0.44, s * 0.32, s * 0.16, -0.35, 0, Math.PI * 2);
+  ctx.fill();
 
   // Forehead tabby stripes
   ctx.strokeStyle = color.stripe;
@@ -147,11 +168,14 @@ export function drawCartoonCat(
       ctx.arc(ex, ey, eyeR * 0.68, 0, Math.PI * 2);
       ctx.fill();
 
-      // Pupil
+      // Pupil (slightly wider/excited during combo!)
       ctx.fillStyle = '#09090b';
-      const pupilR = pose === 'falling' ? eyeR * 0.28 : eyeR * 0.42;
+      const pupilR =
+        pose === 'falling'
+          ? eyeR * 0.28
+          : eyeR * (0.42 + comboHeat * 0.12);
       ctx.beginPath();
-      ctx.arc(ex, ey, pupilR, 0, Math.PI * 2);
+      ctx.arc(ex, ey - (pose === 'climbing' ? eyeR * 0.08 : 0), pupilR, 0, Math.PI * 2);
       ctx.fill();
 
       // Catchlight
@@ -203,6 +227,13 @@ export function drawCartoonCat(
     ctx.ellipse(0, s * 0.33, s * 0.12, s * 0.16, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+  } else if (pose === 'climbing' && comboHeat > 0.45) {
+    // Happy excited open grin!
+    ctx.fillStyle = '#fb7185';
+    ctx.beginPath();
+    ctx.arc(0, s * 0.21, s * 0.14, 0, Math.PI);
+    ctx.fill();
+    ctx.stroke();
   } else {
     ctx.beginPath();
     ctx.moveTo(0, s * 0.16);
@@ -234,9 +265,12 @@ function drawTail(
   lineW: number,
   color: CatColor,
   pose: CatPose,
-  phase: number
+  phase: number,
+  comboHeat: number
 ): void {
-  const wag = pose === 'swinging' ? Math.sin(phase * 2.2) * 0.45 : Math.sin(phase * 1.8) * 0.25;
+  const speed = pose === 'climbing' ? 2.4 + comboHeat * 2.5 : pose === 'swinging' ? 2.2 : 1.8;
+  const amp = pose === 'swinging' ? 0.45 : pose === 'climbing' ? 0.35 + comboHeat * 0.25 : 0.25;
+  const wag = Math.sin(phase * speed) * amp;
   ctx.save();
   ctx.strokeStyle = color.outline;
   ctx.lineWidth = s * 0.3;
@@ -269,7 +303,7 @@ function drawLegs(
 ): void {
   const kick = pose === 'falling' ? Math.sin(phase * 10) * 0.25 : 0;
   for (const side of [-1, 1]) {
-    const climbOffset = pose === 'climbing' ? side * climbStep * s * 0.22 : 0;
+    const climbOffset = pose === 'climbing' ? -side * climbStep * s * 0.26 : 0;
     const lx = side * s * 0.36;
     const ly = s * 1.68 + climbOffset + side * kick * s;
     ctx.save();
@@ -297,8 +331,8 @@ function drawArms(
     ctx.strokeStyle = color.outline;
     ctx.lineWidth = s * 0.34;
 
-    let startX = side * s * 0.52;
-    let startY = s * 0.55;
+    const startX = side * s * 0.52;
+    const startY = s * 0.55;
     let endX = side * s * 0.22;
     let endY = -s * 1.32; // reaching up to rope
 
@@ -310,8 +344,8 @@ function drawArms(
       endY = s * 1.18;
     } else if (pose === 'climbing') {
       const reach = side * climbStep;
-      endX = side * s * 0.28;
-      endY = -s * 1.15 - reach * s * 0.35;
+      endX = side * s * 0.36;
+      endY = -s * 1.08 - reach * s * 0.42;
     }
 
     ctx.beginPath();
