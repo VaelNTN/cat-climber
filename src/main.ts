@@ -35,6 +35,7 @@ let syncTimeout: number | null = null;
 let hsPollInterval: number | null = null;
 let hsHeadingTapCount = 0;
 let hsHeadingTapTimer: number | null = null;
+let confirmQuitArmed = false;
 
 function renderCatThumb(
   canvas: HTMLCanvasElement,
@@ -46,7 +47,8 @@ function renderCatThumb(
   canvas.height = size * dpr;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
   drawCartoonCat(ctx, size / 2, size * 0.42, size * 0.24, {
     color: getCatColor(colorId),
     eyeColor: state.eyeColor,
@@ -55,21 +57,68 @@ function renderCatThumb(
   });
 }
 
+function syncSoundButtons(): void {
+  const homeBtn = document.getElementById('btn-home-sound');
+  if (homeBtn) homeBtn.textContent = state.soundEnabled ? '🔊' : '🔇';
+  const gameBtn = document.getElementById('btn-game-sound');
+  if (gameBtn) gameBtn.textContent = state.soundEnabled ? '🔊' : '🔇';
+}
+
+function toggleSound(): void {
+  state.soundEnabled = !state.soundEnabled;
+  soundFX.enabled = state.soundEnabled;
+  saveClimberState(state);
+  syncSoundButtons();
+  if (state.soundEnabled) soundFX.playUiTap();
+}
+
+function openPauseModal(): void {
+  if (!stage) return;
+  stage.setPaused(true);
+  scheduleClimberSync(100);
+  confirmQuitArmed = false;
+  const quitBtn = document.getElementById('btn-pause-quit')!;
+  quitBtn.textContent = '🚪 Quit to Menu';
+  quitBtn.classList.remove('armed');
+  document.getElementById('pause-modal')?.classList.remove('hidden');
+}
+
+function closePauseModal(resume = true): void {
+  document.getElementById('pause-modal')?.classList.add('hidden');
+  confirmQuitArmed = false;
+  const quitBtn = document.getElementById('btn-pause-quit');
+  if (quitBtn) {
+    quitBtn.textContent = '🚪 Quit to Menu';
+    quitBtn.classList.remove('armed');
+  }
+  if (resume && stage) {
+    stage.setPaused(false);
+  }
+}
+
 function buildApp(): void {
   const app = document.getElementById('app')!;
   app.innerHTML = `
     <!-- HOME SCREEN -->
     <section id="screen-home" class="screen home-screen">
-      <div class="home-hero">
-        <canvas id="home-cat-canvas" class="cat-preview-canvas"></canvas>
-        <h1 class="game-title">Cat Climber</h1>
-        <p class="game-subtitle">Tap fast to climb higher!</p>
-        <div id="home-best-pill" class="best-pill hidden"></div>
+      <div class="home-topbar">
+        <button id="btn-home-more" class="btn btn-small">✨ More Games</button>
+        <button id="btn-home-sound" class="btn btn-small" aria-label="Toggle sound">🔊</button>
       </div>
-      <div class="home-actions">
-        <button id="btn-home-play" class="btn btn-primary">Play</button>
-        <button id="btn-home-options" class="btn btn-secondary">Cat Style</button>
-        <button id="btn-home-highscores" class="btn btn-secondary">Leaderboard</button>
+      <div class="home-content">
+        <div class="home-hero">
+          <canvas id="home-cat-canvas" class="cat-preview-canvas"></canvas>
+          <h1 class="game-title">Cat Climber</h1>
+          <p class="game-subtitle">Tap left & right to climb, grab Glowing Fish & dodge acorns!</p>
+          <div id="home-best-pill" class="best-pill hidden"></div>
+        </div>
+        <div class="home-actions">
+          <button id="btn-home-play" class="btn btn-primary">▶ Play</button>
+          <div class="home-secondary-row">
+            <button id="btn-home-options" class="btn btn-secondary">🐱 Style</button>
+            <button id="btn-home-highscores" class="btn btn-secondary">🏆 Ranks</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -108,26 +157,19 @@ function buildApp(): void {
 
     <!-- GAME SCREEN -->
     <section id="screen-game" class="screen game-screen hidden">
-      <div class="game-top-bar">
-        <button id="btn-game-menu" class="btn btn-small">← Menu</button>
-        <div style="display:flex;gap:8px;">
-          <button id="btn-game-options" class="btn btn-small">Cat Style</button>
-          <button id="btn-game-sound" class="btn btn-small">🔊 On</button>
+      <div class="game-hud-bar">
+        <button id="btn-game-pause" class="btn btn-small" aria-label="Pause">⏸ Pause</button>
+        <div class="hud-center">
+          <div class="meters-pill">
+            <span id="meters-value" class="meters-value">0.0 m</span>
+          </div>
+          <div id="meters-best" class="meters-best">Best: 0.0 m</div>
         </div>
-      </div>
-
-      <div class="meters-hud">
-        <div id="meters-value" class="meters-value">0.0 m</div>
-        <div id="meters-best" class="meters-best">Best: 0.0 m</div>
+        <button id="btn-game-sound" class="btn btn-small" aria-label="Toggle sound">🔊</button>
       </div>
 
       <div class="stage-wrap">
         <canvas id="climber-canvas" class="stage-canvas"></canvas>
-      </div>
-
-      <div class="game-bottom-bar">
-        <span class="tap-hint">Tap anywhere to climb!</span>
-        <button id="btn-new-climb" class="btn btn-small">New Climb</button>
       </div>
     </section>
 
@@ -165,9 +207,58 @@ function buildApp(): void {
 
       <div id="hs-list" class="hs-list"></div>
     </section>
+
+    <!-- PAUSE MODAL -->
+    <div id="pause-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <h3 class="modal-title">⏸ Paused</h3>
+        <p class="modal-sub">Catch a catnap — your climb progress is safe!</p>
+        <button id="btn-pause-resume" class="btn btn-primary" style="height:48px;">▶ Resume</button>
+        <button id="btn-pause-options" class="btn btn-secondary">🐱 Cat Style</button>
+        <button id="btn-pause-new" class="btn btn-secondary">↻ New Climb</button>
+        <button id="btn-pause-quit" class="btn btn-danger">🚪 Quit to Menu</button>
+      </div>
+    </div>
+
+    <!-- MORE GAMES MODAL -->
+    <div id="more-games-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <h3 class="modal-title">✨ More Games by VaelNTN</h3>
+        <p class="modal-sub">Handcrafted arcade games from VaelNTN Studios.</p>
+        <div class="more-games-list">
+          <a class="more-game-item featured" href="https://github.com/VaelNTN/starforge-survivors/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">⭐ Starforge Survivors</div>
+              <div class="more-game-desc">Flagship sci-fi roguelite — 6 heroes, 6 bosses & zero ads</div>
+            </div>
+            <span class="more-game-badge">FLAGSHIP</span>
+          </a>
+          <a class="more-game-item" href="https://github.com/VaelNTN/cat-hanger/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">🐱 Cat Hanger</div>
+              <div class="more-game-desc">Brave sunset wind gusts & hit rhythmic grip boosts</div>
+            </div>
+          </a>
+          <a class="more-game-item" href="https://github.com/VaelNTN/dog-climber/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">🐕 Dog Climber</div>
+              <div class="more-game-desc">Grab Golden Bones & dodge falling pinecones up the ladder</div>
+            </div>
+          </a>
+          <a class="more-game-item" href="https://github.com/VaelNTN/dog-hanger/releases/latest" target="_blank" rel="noopener noreferrer">
+            <div>
+              <div class="more-game-name">🐶 Dog Hanger</div>
+              <div class="more-game-desc">Hold on tight & catch flying frisbees over the sunny pool</div>
+            </div>
+          </a>
+        </div>
+        <button id="btn-more-close" class="btn btn-secondary" style="height:44px;">Close</button>
+      </div>
+    </div>
   `;
 
   populateOptions();
+  syncSoundButtons();
   wireEvents();
   refreshHome();
   startHomePreview();
@@ -252,6 +343,8 @@ function scheduleClimberSync(delayMs = 2500): void {
 
 function showScreen(target: ScreenName): void {
   currentScreen = target;
+  closePauseModal(false);
+  document.getElementById('more-games-modal')?.classList.add('hidden');
   const map: Record<ScreenName, HTMLElement> = {
     home: document.getElementById('screen-home')!,
     options: document.getElementById('screen-options')!,
@@ -288,6 +381,7 @@ function showScreen(target: ScreenName): void {
 }
 
 function refreshHome(): void {
+  syncSoundButtons();
   const pill = document.getElementById('home-best-pill')!;
   if (state.bestMeters > 0) {
     pill.textContent = `Best Climb: ${state.bestMeters.toFixed(1)} m`;
@@ -347,9 +441,7 @@ function updateMetersHud(): void {
 
 function startGameStage(): void {
   updateMetersHud();
-  document.getElementById('btn-game-sound')!.textContent = state.soundEnabled
-    ? '🔊 On'
-    : '🔇 Off';
+  syncSoundButtons();
 
   const canvas = document.getElementById('climber-canvas') as HTMLCanvasElement;
   const appearance = {
@@ -373,8 +465,13 @@ function startGameStage(): void {
       bestMeters: state.bestMeters,
     },
     {
-      onClimbStep: (delta) => {
-        soundFX.playClimb();
+      onClimbStep: (delta, eventType) => {
+        if (eventType === 'bonk') {
+          soundFX.playBonk();
+          return;
+        }
+        if (eventType === 'fever') soundFX.playFever();
+        else soundFX.playClimb();
         state.currentMeters += delta;
         updateClimberHighscore(state);
         updateMetersHud();
@@ -574,6 +671,24 @@ function wireEvents(): void {
     showScreen('highscores');
   });
 
+  document.getElementById('btn-home-sound')!.addEventListener('click', toggleSound);
+
+  document.getElementById('btn-home-more')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    document.getElementById('more-games-modal')?.classList.remove('hidden');
+  });
+
+  document.getElementById('btn-more-close')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    document.getElementById('more-games-modal')?.classList.add('hidden');
+  });
+
+  document.getElementById('more-games-modal')!.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) {
+      document.getElementById('more-games-modal')?.classList.add('hidden');
+    }
+  });
+
   document.getElementById('btn-options-back')!.addEventListener('click', () => {
     soundFX.playUiTap();
     showScreen(optionsFromPlay ? 'game' : 'home');
@@ -589,33 +704,51 @@ function wireEvents(): void {
     saveClimberState(state);
   });
 
-  document.getElementById('btn-game-menu')!.addEventListener('click', () => {
+  document.getElementById('btn-game-pause')!.addEventListener('click', () => {
     soundFX.playUiTap();
-    showScreen('home');
+    openPauseModal();
   });
 
-  document.getElementById('btn-game-options')!.addEventListener('click', () => {
+  document.getElementById('btn-game-sound')!.addEventListener('click', toggleSound);
+
+  document.getElementById('btn-pause-resume')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    closePauseModal(true);
+  });
+
+  document.getElementById('btn-pause-options')!.addEventListener('click', () => {
     soundFX.playUiTap();
     optionsFromPlay = true;
     showScreen('options');
   });
 
-  document.getElementById('btn-game-sound')!.addEventListener('click', () => {
-    state.soundEnabled = !state.soundEnabled;
-    soundFX.enabled = state.soundEnabled;
-    saveClimberState(state);
-    soundFX.playUiTap();
-    document.getElementById('btn-game-sound')!.textContent = state.soundEnabled
-      ? '🔊 On'
-      : '🔇 Off';
-  });
-
-  document.getElementById('btn-new-climb')!.addEventListener('click', () => {
+  document.getElementById('btn-pause-new')!.addEventListener('click', () => {
     soundFX.playUiTap();
     scheduleClimberSync(100);
+    closePauseModal(true);
     startNewClimberRun(state);
     stage?.setMeters(0, state.bestMeters);
     updateMetersHud();
+  });
+
+  document.getElementById('btn-pause-quit')!.addEventListener('click', () => {
+    soundFX.playUiTap();
+    const quitBtn = document.getElementById('btn-pause-quit')!;
+    if (!confirmQuitArmed) {
+      confirmQuitArmed = true;
+      quitBtn.textContent = '⚠️ Confirm Quit?';
+      quitBtn.classList.add('armed');
+    } else {
+      showScreen('home');
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && currentScreen === 'game') {
+      const modal = document.getElementById('pause-modal');
+      if (modal && !modal.classList.contains('hidden')) closePauseModal(true);
+      else openPauseModal();
+    }
   });
 
   document.getElementById('btn-hs-back')!.addEventListener('click', () => {

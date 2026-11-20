@@ -5,7 +5,8 @@ interface ClimbPopup {
   x: number;
   y: number;
   text: string;
-  isTreat: boolean;
+  color: string;
+  big?: boolean;
   life: number;
   maxLife: number;
 }
@@ -33,8 +34,27 @@ interface SpeedLine {
   maxLife: number;
 }
 
+interface GlowingFish {
+  kind: 'branch' | 'float';
+  side: -1 | 1;
+  meterPos: number;
+  y: number;
+  vy: number;
+  swayPhase: number;
+  collected: boolean;
+}
+
+interface FallingAcorn {
+  side: -1 | 1;
+  y: number;
+  vy: number;
+  telegraph: number;
+  rot: number;
+  resolved: boolean;
+}
+
 export interface ClimberStageCallbacks {
-  onClimbStep: (deltaMeters: number) => void;
+  onClimbStep: (deltaMeters: number, eventType?: 'normal' | 'fever' | 'dodge' | 'bonk') => void;
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -63,6 +83,7 @@ export class ClimberStage {
   private height = 0;
   private dpr = 1;
   private active = false;
+  private paused = false;
   private rafId: number | null = null;
   private lastTime = 0;
 
@@ -74,10 +95,20 @@ export class ClimberStage {
   private climbAnim = 1;
   private smoothClimbAnim = 1;
   private bounceOffset = 0;
+  private bonkShake = 0;
   private clock = 0;
   private comboHeat = 0;
   private tapStreak = 0;
   private lastTapClock = -10;
+  private feverTimer = 0;
+
+  private catLane: -1 | 1 = 1;
+  private catOffsetX = 0;
+  private fishTreats: GlowingFish[] = [];
+  private nextBranchFishMeter = 7;
+  private nextFloatFishIn = 5.5;
+  private acorns: FallingAcorn[] = [];
+  private nextAcornIn = 4.4;
 
   private popups: ClimbPopup[] = [];
   private particles: PuffParticle[] = [];
@@ -107,10 +138,12 @@ export class ClimberStage {
     this.visualMeters = opts.initialMeters;
     this.bestMeters = opts.bestMeters;
     this.nextTreatMeter = Math.floor(opts.initialMeters / 10 + 1) * 10;
+    this.nextBranchFishMeter = Math.floor(opts.initialMeters / 8 + 1) * 8;
     this.callbacks = callbacks;
 
     this.handleResize = this.handleResize.bind(this);
     this.onPointerDown = this.onPointerDown.bind(this);
+    this.onKeyDown = this.onKeyDown.bind(this);
     this.onContextMenu = this.onContextMenu.bind(this);
     this.loop = this.loop.bind(this);
   }
@@ -125,14 +158,33 @@ export class ClimberStage {
     this.accessory = opts.accessory;
   }
 
+  public isPaused(): boolean {
+    return this.paused;
+  }
+
+  public setPaused(next: boolean): void {
+    if (this.paused === next) return;
+    this.paused = next;
+    if (!next) this.lastTime = performance.now();
+  }
+
   public setMeters(meters: number, bestMeters: number): void {
     this.targetMeters = meters;
     this.visualMeters = meters;
     this.bestMeters = bestMeters;
     this.nextTreatMeter = Math.floor(meters / 10 + 1) * 10;
+    this.nextBranchFishMeter = Math.floor(meters / 8 + 1) * 8;
     this.bounceOffset = 0;
+    this.bonkShake = 0;
     this.comboHeat = 0;
     this.tapStreak = 0;
+    this.feverTimer = 0;
+    this.catLane = 1;
+    this.catOffsetX = 0;
+    this.fishTreats = [];
+    this.acorns = [];
+    this.nextFloatFishIn = 5.5;
+    this.nextAcornIn = 4.4;
     this.popups = [];
     this.particles = [];
     this.speedLines = [];
@@ -144,6 +196,7 @@ export class ClimberStage {
     this.handleResize();
     window.addEventListener('resize', this.handleResize);
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
+    window.addEventListener('keydown', this.onKeyDown);
     this.canvas.addEventListener('contextmenu', this.onContextMenu);
     this.lastTime = performance.now();
     this.rafId = requestAnimationFrame(this.loop);
@@ -151,8 +204,10 @@ export class ClimberStage {
 
   public stop(): void {
     this.active = false;
+    this.paused = false;
     window.removeEventListener('resize', this.handleResize);
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    window.removeEventListener('keydown', this.onKeyDown);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -174,11 +229,124 @@ export class ClimberStage {
     this.canvas.height = Math.round(rect.height * this.dpr);
   }
 
+  private getFishScreenPos(f: GlowingFish): { x: number; y: number } {
+    const cx = this.width * 0.5;
+    if (f.kind === 'branch') {
+      const y = this.height * 0.58 - (f.meterPos - this.visualMeters) * this.pxPerMeter;
+      return { x: cx + f.side * 66, y };
+    }
+    const sway = Math.sin(this.clock * 3.4 + f.swayPhase) * 20;
+    return { x: cx + f.side * 54 + sway, y: f.y };
+  }
+
+  private collectGlowingFish(f: GlowingFish, x: number, y: number): void {
+    if (f.collected) return;
+    f.collected = true;
+    this.feverTimer = 3.6;
+    this.comboHeat = 1;
+    this.tapStreak += 4;
+    this.lastTapClock = this.clock;
+    const bonus = 2.0;
+    this.targetMeters += bonus;
+    if (this.targetMeters > this.bestMeters) this.bestMeters = this.targetMeters;
+
+    this.popups.push({
+      x: Math.max(76, Math.min(this.width - 76, x)),
+      y: Math.max(40, y - 10),
+      text: '🐟 FEVER BURST! +2.0m',
+      color: '#2dd4bf',
+      big: true,
+      life: 0,
+      maxLife: 1.05,
+    });
+    for (let i = 0; i < 16; i++) {
+      const ang = (Math.PI * 2 * i) / 16;
+      const spd = 85 + Math.random() * 145;
+      this.particles.push({
+        x,
+        y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        size: 3.5 + Math.random() * 3,
+        color: i % 2 === 0 ? '#fde047' : '#2dd4bf',
+        kind: 'spark',
+        life: 0,
+        maxLife: 0.55,
+      });
+    }
+    this.callbacks.onClimbStep(bonus, 'fever');
+  }
+
+  private onKeyDown(ev: KeyboardEvent): void {
+    if (this.paused) return;
+    if (ev.code === 'ArrowLeft' || ev.code === 'KeyA') {
+      ev.preventDefault();
+      this.triggerClimbTap(-1, this.width * 0.35, this.height * 0.5);
+    } else if (ev.code === 'ArrowRight' || ev.code === 'KeyD') {
+      ev.preventDefault();
+      this.triggerClimbTap(1, this.width * 0.65, this.height * 0.5);
+    } else if (ev.code === 'Space' || ev.code === 'ArrowUp' || ev.code === 'KeyW') {
+      ev.preventDefault();
+      this.triggerClimbTap(this.catLane, this.width * 0.5, this.height * 0.5);
+    }
+  }
+
   private onPointerDown(ev: PointerEvent): void {
     ev.preventDefault();
+    if (this.paused) return;
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
 
-    let step = 0.5;
+    const rect = this.canvas.getBoundingClientRect();
+    const px = ev.clientX - rect.left;
+    const py = ev.clientY - rect.top;
+
+    // 1. Direct tap on a glowing Fish Treat (floating or on a branch)
+    for (const f of this.fishTreats) {
+      if (f.collected) continue;
+      const pos = this.getFishScreenPos(f);
+      if (Math.hypot(px - pos.x, py - pos.y) <= 58) {
+        this.catLane = f.side;
+        this.collectGlowingFish(f, pos.x, pos.y);
+        return;
+      }
+    }
+
+    // 2. Direct tap on a falling Acorn to swat it away
+    const cx = this.width * 0.5;
+    for (const ac of this.acorns) {
+      if (ac.resolved || ac.telegraph > 0) continue;
+      const acX = cx + ac.side * 22;
+      if (Math.hypot(px - acX, py - ac.y) <= 54) {
+        ac.resolved = true;
+        this.tapStreak += 2;
+        this.comboHeat = Math.min(1, this.comboHeat + 0.2);
+        this.lastTapClock = this.clock;
+        const swatBonus = 0.8;
+        this.targetMeters += swatBonus;
+        if (this.targetMeters > this.bestMeters) this.bestMeters = this.targetMeters;
+        this.popups.push({
+          x: acX,
+          y: Math.max(36, ac.y - 10),
+          text: 'BATTED! +0.8m',
+          color: '#34d399',
+          big: true,
+          life: 0,
+          maxLife: 0.85,
+        });
+        this.callbacks.onClimbStep(swatBonus, 'dodge');
+        return;
+      }
+    }
+
+    const side: -1 | 1 = px < this.width * 0.5 ? -1 : 1;
+    this.triggerClimbTap(side, px, py);
+  }
+
+  private triggerClimbTap(side: -1 | 1, px: number, py: number): void {
+    this.catLane = side;
+    const feverMult = this.feverTimer > 0 ? 1.75 : 1;
+    const comboMult = this.tapStreak >= 10 ? 1.25 : 1;
+    let step = 0.5 * feverMult * comboMult;
     let treatHit = false;
     if (this.targetMeters + step >= this.nextTreatMeter) {
       step += 1.0;
@@ -194,33 +362,36 @@ export class ClimberStage {
     this.climbAnim = this.climbStepDir;
     this.bounceOffset = -9;
 
-    // Combo heat rises on quick taps
-    if (this.clock - this.lastTapClock < 0.45) {
+    // Auto-collect branch fish treat if climbing past on the matching side
+    for (const f of this.fishTreats) {
+      if (!f.collected && f.kind === 'branch' && f.side === this.catLane && Math.abs(this.targetMeters - f.meterPos) <= 1.25) {
+        const pos = this.getFishScreenPos(f);
+        this.collectGlowingFish(f, pos.x, pos.y);
+      }
+    }
+
+    if (this.clock - this.lastTapClock < 0.55) {
       this.tapStreak += 1;
       this.comboHeat = Math.min(1, this.comboHeat + 0.14);
     } else {
       this.tapStreak = 1;
-      this.comboHeat = Math.max(0.12, this.comboHeat * 0.65);
+      this.comboHeat = Math.max(0.14, this.comboHeat * 0.65);
     }
     this.lastTapClock = this.clock;
-
-    const rect = this.canvas.getBoundingClientRect();
-    const px = ev.clientX - rect.left;
-    const py = ev.clientY - rect.top;
 
     this.popups.push({
       x: Math.max(46, Math.min(this.width - 46, px)),
       y: Math.max(28, py - 14),
       text: treatHit ? `FISH +${step.toFixed(1)}m!` : `+${step.toFixed(1)} m`,
-      isTreat: treatHit,
+      color: treatHit || this.feverTimer > 0 ? '#2dd4bf' : '#fde047',
+      big: treatHit || this.feverTimer > 0,
       life: 0,
       maxLife: treatHit ? 0.95 : 0.65,
     });
 
-    const cx = this.width * 0.5;
+    const cx = this.width * 0.5 + this.catOffsetX;
     const catY = this.height * 0.58;
 
-    // Puff cloud burst under paws
     const puffCount = treatHit ? 10 : 6;
     for (let i = 0; i < puffCount; i++) {
       this.particles.push({
@@ -229,14 +400,13 @@ export class ClimberStage {
         vx: (Math.random() - 0.5) * 95,
         vy: 35 + Math.random() * 75,
         size: 4 + Math.random() * 5,
-        color: '#f0fdfa',
+        color: this.feverTimer > 0 ? '#5eead4' : '#f0fdfa',
         kind: 'puff',
         life: 0,
         maxLife: 0.34 + Math.random() * 0.22,
       });
     }
 
-    // Golden treat sparkles on fish collection
     if (treatHit) {
       for (let i = 0; i < 16; i++) {
         const ang = (Math.PI * 2 * i) / 16;
@@ -255,24 +425,23 @@ export class ClimberStage {
       }
     }
 
-    // Upward speed lines rushing downward on every tap
     const streakCount = 3 + Math.floor(this.comboHeat * 4);
     for (let i = 0; i < streakCount; i++) {
-      const side = Math.random() > 0.5 ? 1 : -1;
-      const sx = cx + side * (46 + Math.random() * Math.max(40, this.width * 0.38));
+      const sSide = Math.random() > 0.5 ? 1 : -1;
+      const sx = this.width * 0.5 + sSide * (46 + Math.random() * Math.max(40, this.width * 0.38));
       this.speedLines.push({
         x: sx,
         y: -20 + Math.random() * (this.height * 0.55),
         len: 26 + Math.random() * 44,
         speed: 440 + Math.random() * 320 + this.comboHeat * 240,
         alpha: 0.32 + this.comboHeat * 0.35,
-        color: this.comboHeat > 0.55 && i % 2 === 0 ? '#fbbf24' : '#e0f2fe',
+        color: this.feverTimer > 0 || (this.comboHeat > 0.55 && i % 2 === 0) ? '#fbbf24' : '#e0f2fe',
         life: 0,
         maxLife: 0.28 + Math.random() * 0.14,
       });
     }
 
-    this.callbacks.onClimbStep(step);
+    this.callbacks.onClimbStep(step, treatHit ? 'fever' : 'normal');
   }
 
   private loop(now: number): void {
@@ -280,7 +449,9 @@ export class ClimberStage {
     const dt = Math.min(0.05, Math.max(0.001, (now - this.lastTime) / 1000));
     this.lastTime = now;
 
-    this.update(dt);
+    if (!this.paused) {
+      this.update(dt);
+    }
     this.render();
 
     this.rafId = requestAnimationFrame(this.loop);
@@ -291,26 +462,139 @@ export class ClimberStage {
     this.visualMeters += (this.targetMeters - this.visualMeters) * Math.min(1, dt * 16);
     this.smoothClimbAnim += (this.climbAnim - this.smoothClimbAnim) * Math.min(1, dt * 22);
     this.bounceOffset *= Math.pow(0.002, dt);
+    this.bonkShake = Math.max(0, this.bonkShake - dt * 2.6);
 
-    // Decay combo heat smoothly if idle
-    if (this.clock - this.lastTapClock > 0.35) {
-      this.comboHeat = Math.max(0, this.comboHeat - dt * 0.55);
+    const targetOff = this.catLane * 17;
+    this.catOffsetX += (targetOff - this.catOffsetX) * Math.min(1, dt * 15);
+
+    if (this.feverTimer > 0) {
+      this.feverTimer = Math.max(0, this.feverTimer - dt);
+      this.comboHeat = Math.max(this.comboHeat, 0.85);
+    }
+
+    if (this.clock - this.lastTapClock > 0.45 && this.feverTimer <= 0) {
+      this.comboHeat = Math.max(0, this.comboHeat - dt * 0.52);
       if (this.comboHeat <= 0.02) {
         this.tapStreak = 0;
       }
     }
 
-    // Spawn rising combo fire embers when combo is hot
+    // Spawn branch Fish Treats ahead
+    while (this.nextBranchFishMeter <= this.visualMeters + 14) {
+      const side: -1 | 1 = Math.random() > 0.5 ? 1 : -1;
+      this.fishTreats.push({
+        kind: 'branch',
+        side,
+        meterPos: this.nextBranchFishMeter,
+        y: 0,
+        vy: 0,
+        swayPhase: Math.random() * Math.PI * 2,
+        collected: false,
+      });
+      this.nextBranchFishMeter += 8 + Math.floor(Math.random() * 4);
+    }
+
+    // Spawn gently floating Fish Treats
+    if (this.targetMeters >= 3 && this.height > 0) {
+      this.nextFloatFishIn -= dt;
+      if (this.nextFloatFishIn <= 0) {
+        this.nextFloatFishIn = 6.5 + Math.random() * 3.5;
+        this.fishTreats.push({
+          kind: 'float',
+          side: Math.random() > 0.5 ? 1 : -1,
+          meterPos: this.visualMeters,
+          y: -18,
+          vy: 74,
+          swayPhase: Math.random() * Math.PI * 2,
+          collected: false,
+        });
+      }
+    }
+
+    for (const f of this.fishTreats) {
+      if (f.collected) continue;
+      if (f.kind === 'float') {
+        f.y += f.vy * dt;
+      }
+    }
+    this.fishTreats = this.fishTreats.filter((f) => {
+      if (f.collected) return false;
+      if (f.kind === 'branch') return f.meterPos >= this.visualMeters - 8;
+      return f.y < this.height + 40;
+    });
+
+    // Spawn telegraphed falling acorns
+    if (this.targetMeters >= 4 && this.height > 0) {
+      this.nextAcornIn -= dt;
+      if (this.nextAcornIn <= 0) {
+        this.nextAcornIn = Math.max(3.3, 5.4 - Math.min(1.8, this.targetMeters * 0.008)) + Math.random() * 1.4;
+        const side: -1 | 1 = Math.random() > 0.45 ? this.catLane : ((this.catLane * -1) as -1 | 1);
+        this.acorns.push({
+          side,
+          y: 30,
+          vy: 210 + Math.min(95, this.targetMeters * 0.35),
+          telegraph: 0.9,
+          rot: 0,
+          resolved: false,
+        });
+      }
+    }
+
+    const catY = this.height * 0.58;
+    for (const ac of this.acorns) {
+      if (ac.resolved) continue;
+      if (ac.telegraph > 0) {
+        ac.telegraph = Math.max(0, ac.telegraph - dt);
+      } else {
+        ac.y += ac.vy * dt;
+        ac.rot += dt * 6.5 * ac.side;
+        if (Math.abs(ac.y - catY) < 34) {
+          if (ac.side === this.catLane) {
+            ac.resolved = true;
+            this.tapStreak = Math.floor(this.tapStreak / 2);
+            this.comboHeat *= 0.38;
+            this.bonkShake = 1;
+            this.popups.push({
+              x: this.width * 0.5 + ac.side * 22,
+              y: catY - 24,
+              text: 'ACORN BONK!',
+              color: '#fb7185',
+              big: true,
+              life: 0,
+              maxLife: 0.85,
+            });
+            this.callbacks.onClimbStep(0, 'bonk');
+          }
+        } else if (ac.y > catY + 38) {
+          ac.resolved = true;
+          this.tapStreak += 2;
+          this.comboHeat = Math.min(1, this.comboHeat + 0.16);
+          const dodgeBonus = 0.7;
+          this.targetMeters += dodgeBonus;
+          if (this.targetMeters > this.bestMeters) this.bestMeters = this.targetMeters;
+          this.popups.push({
+            x: this.width * 0.5 + this.catOffsetX,
+            y: catY - 34,
+            text: 'DODGED! +0.7m',
+            color: '#34d399',
+            life: 0,
+            maxLife: 0.8,
+          });
+          this.callbacks.onClimbStep(dodgeBonus, 'dodge');
+        }
+      }
+    }
+    this.acorns = this.acorns.filter((ac) => !ac.resolved && ac.y < this.height + 50);
+
     if (this.comboHeat > 0.4 && Math.random() < dt * (12 + this.comboHeat * 18)) {
-      const cx = this.width * 0.5;
-      const catY = this.height * 0.58;
+      const cx = this.width * 0.5 + this.catOffsetX;
       this.particles.push({
         x: cx + (Math.random() - 0.5) * 44,
         y: catY + 20 + Math.random() * 24,
         vx: (Math.random() - 0.5) * 35,
         vy: -55 - Math.random() * 75,
         size: 2.5 + Math.random() * 3,
-        color: Math.random() > 0.4 ? '#fb923c' : '#fde047',
+        color: this.feverTimer > 0 ? '#2dd4bf' : Math.random() > 0.4 ? '#fb923c' : '#fde047',
         kind: 'ember',
         life: 0,
         maxLife: 0.35 + Math.random() * 0.25,
@@ -351,10 +635,8 @@ export class ClimberStage {
     const cx = this.width * 0.5;
     const catBaseY = this.height * 0.58;
 
-    // Ground park/garden meadow when near 0m
     const groundY = catBaseY + 62 + this.visualMeters * this.pxPerMeter;
     if (groundY < this.height + 140) {
-      // Rolling sunlit garden hills
       ctx.fillStyle = '#0f766e';
       ctx.beginPath();
       ctx.moveTo(0, groundY);
@@ -365,13 +647,11 @@ export class ClimberStage {
       ctx.closePath();
       ctx.fill();
 
-      // Garden grass & bushes
       ctx.fillStyle = '#059669';
       ctx.fillRect(0, groundY, this.width, this.height - groundY + 140);
       ctx.fillStyle = '#34d399';
       ctx.fillRect(0, groundY, this.width, 8);
 
-      // Cute park bushes & blossoms
       for (const bxFrac of [0.14, 0.28, 0.72, 0.87]) {
         const bx = this.width * bxFrac;
         ctx.fillStyle = '#047857';
@@ -388,20 +668,17 @@ export class ClimberStage {
       }
     }
 
-    // Detailed treehouse wooden ladder & vine trunk
     const ladderTop = 0;
     const ladderBottom = Math.min(this.height, groundY);
-    const railHalf = 20;
+    const railHalf = 26;
 
-    // Subtle tree trunk shadow backdrop behind ladder
-    const trunkGrad = ctx.createLinearGradient(cx - 26, 0, cx + 26, 0);
+    const trunkGrad = ctx.createLinearGradient(cx - 32, 0, cx + 32, 0);
     trunkGrad.addColorStop(0, 'rgba(69, 26, 3, 0.35)');
     trunkGrad.addColorStop(0.5, 'rgba(120, 53, 15, 0.25)');
     trunkGrad.addColorStop(1, 'rgba(69, 26, 3, 0.35)');
     ctx.fillStyle = trunkGrad;
-    ctx.fillRect(cx - 26, ladderTop, 52, ladderBottom);
+    ctx.fillRect(cx - 32, ladderTop, 64, ladderBottom);
 
-    // Ladder wooden side rails with grain highlights
     ctx.fillStyle = '#5c2808';
     ctx.fillRect(cx - railHalf - 5, ladderTop, 10, ladderBottom);
     ctx.fillRect(cx + railHalf - 5, ladderTop, 10, ladderBottom);
@@ -412,10 +689,8 @@ export class ClimberStage {
     ctx.fillRect(cx - railHalf - 2, ladderTop, 2, ladderBottom);
     ctx.fillRect(cx + railHalf - 2, ladderTop, 2, ladderBottom);
 
-    // Curling green vines & leaves up the rails
     this.drawVinesOnRails(ctx, cx, railHalf, ladderBottom);
 
-    // Wooden rungs scrolling downward as cat climbs
     const rungSpacing = 32;
     const offset = (this.visualMeters * this.pxPerMeter) % rungSpacing;
     for (let y = offset - rungSpacing; y < ladderBottom; y += rungSpacing) {
@@ -430,7 +705,6 @@ export class ClimberStage {
       ctx.fillRect(cx - railHalf + 3, y + 1.2, (railHalf - 3) * 2, 1.5);
     }
 
-    // Alternating treehouse platform ledges every 5 meters
     const minM = Math.max(5, Math.floor((this.visualMeters - 15) / 5) * 5);
     const maxM = Math.ceil((this.visualMeters + 18) / 5) * 5;
     ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -442,7 +716,6 @@ export class ClimberStage {
       const ledgeW = 66;
       const ledgeX = onRight ? cx + railHalf + 5 : cx - railHalf - 5 - ledgeW;
 
-      // Support bracket
       ctx.fillStyle = '#5c2808';
       ctx.beginPath();
       if (onRight) {
@@ -457,7 +730,6 @@ export class ClimberStage {
       ctx.closePath();
       ctx.fill();
 
-      // Ledge plank
       ctx.fillStyle = '#78350f';
       ctx.beginPath();
       ctx.roundRect(ledgeX, markerY - 5, ledgeW, 10, 4);
@@ -465,7 +737,6 @@ export class ClimberStage {
       ctx.fillStyle = '#d97706';
       ctx.fillRect(ledgeX + 4, markerY - 4, ledgeW - 8, 3);
 
-      // Cute leaf tuft on outer corner of ledge
       const leafX = onRight ? ledgeX + ledgeW - 6 : ledgeX + 6;
       ctx.fillStyle = '#10b981';
       ctx.beginPath();
@@ -479,20 +750,92 @@ export class ClimberStage {
       ctx.strokeStyle = 'rgba(240, 253, 250, 0.16)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(cx + 28, markerY);
+      ctx.moveTo(cx + 34, markerY);
       ctx.lineTo(this.width - 14, markerY);
       ctx.stroke();
 
       ctx.fillStyle = 'rgba(240, 253, 250, 0.9)';
       ctx.textAlign = 'left';
-      ctx.fillText(`${m} m`, cx + 30, markerY - 9);
+      ctx.fillText(`${m} m`, cx + 36, markerY - 9);
     }
 
-    // Shiny glowing golden fish treat with sparkle rings on next 10m rung
+    // Center 10m milestone fish treat
     const treatY = catBaseY - (this.nextTreatMeter - this.visualMeters) * this.pxPerMeter;
     if (treatY >= -34 && treatY <= this.height + 34) {
       const bob = Math.sin(this.clock * 4) * 3.5;
       this.drawFishTreat(ctx, cx, treatY - 12 + bob);
+    }
+
+    // Interactive Glowing Fish Treats (branch-perched & floating down)
+    for (const f of this.fishTreats) {
+      if (f.collected) continue;
+      const pos = this.getFishScreenPos(f);
+      if (pos.y < -40 || pos.y > this.height + 40) continue;
+      if (f.kind === 'branch') {
+        const railX = cx + f.side * railHalf;
+        ctx.save();
+        ctx.strokeStyle = '#78350f';
+        ctx.lineWidth = 8;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(railX, pos.y + 12);
+        ctx.lineTo(pos.x + f.side * 10, pos.y + 12);
+        ctx.stroke();
+        ctx.strokeStyle = '#b45309';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        // Tiny leaf parachute above floating fish
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(pos.x - 10, pos.y - 22);
+        ctx.lineTo(pos.x, pos.y - 6);
+        ctx.moveTo(pos.x + 10, pos.y - 22);
+        ctx.lineTo(pos.x, pos.y - 6);
+        ctx.stroke();
+        ctx.fillStyle = '#34d399';
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y - 20, 13, Math.PI, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+      const bob = Math.sin(this.clock * 5.2 + f.swayPhase) * 3;
+      this.drawFishTreat(ctx, pos.x, pos.y + bob);
+    }
+
+    // Telegraphed & Falling Acorns
+    for (const ac of this.acorns) {
+      if (ac.resolved) continue;
+      const acX = cx + ac.side * 22;
+      if (ac.telegraph > 0) {
+        const flash = 0.5 + 0.5 * Math.sin(this.clock * 22);
+        ctx.save();
+        ctx.strokeStyle = `rgba(251, 146, 60, ${0.32 + flash * 0.45})`;
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.moveTo(acX, 34);
+        ctx.lineTo(acX, catBaseY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = `rgba(234, 88, 12, ${0.82 + flash * 0.18})`;
+        ctx.beginPath();
+        ctx.roundRect(acX - 28, 12, 56, 22, 11);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = '900 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⚠️ 🌰', acX, 23);
+        ctx.restore();
+      } else {
+        this.drawAcorn(ctx, acX, ac.y, ac.rot);
+      }
     }
 
     // Personal Best line
@@ -504,7 +847,7 @@ export class ClimberStage {
         ctx.setLineDash([6, 5]);
         ctx.beginPath();
         ctx.moveTo(16, bestY);
-        ctx.lineTo(cx - 28, bestY);
+        ctx.lineTo(cx - 32, bestY);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.fillStyle = '#fde047';
@@ -513,7 +856,6 @@ export class ClimberStage {
       }
     }
 
-    // Upward speed lines
     for (const sl of this.speedLines) {
       const t = sl.life / sl.maxLife;
       ctx.save();
@@ -528,7 +870,6 @@ export class ClimberStage {
       ctx.restore();
     }
 
-    // Particles (puffs, sparks, combo embers)
     for (const pt of this.particles) {
       const t = pt.life / pt.maxLife;
       ctx.save();
@@ -540,29 +881,30 @@ export class ClimberStage {
       ctx.restore();
     }
 
-    // Combo Fire Aura around cat when tapping fast!
-    const catSize = Math.max(26, Math.min(36, Math.min(this.width, this.height) * 0.085));
+    const catSize = Math.max(24, Math.min(35, Math.min(this.width, this.height) * 0.082));
+    const shakeX = this.bonkShake > 0 ? Math.sin(this.clock * 60) * 6 * this.bonkShake : 0;
+    const catX = cx + this.catOffsetX + shakeX;
     const catY = catBaseY + this.bounceOffset;
-    if (this.comboHeat > 0.25) {
-      const auraIntensity = (this.comboHeat - 0.25) / 0.75;
+
+    if (this.comboHeat > 0.25 || this.feverTimer > 0) {
+      const auraIntensity = this.feverTimer > 0 ? 1 : (this.comboHeat - 0.25) / 0.75;
       const flicker = 0.85 + 0.15 * Math.sin(this.clock * 22);
       const auraR = catSize * (2.1 + auraIntensity * 0.75) * flicker;
-      const fireGrad = ctx.createRadialGradient(cx, catY + 12, catSize * 0.4, cx, catY + 12, auraR);
-      fireGrad.addColorStop(0, `rgba(253, 224, 71, ${0.38 * auraIntensity})`);
+      const fireGrad = ctx.createRadialGradient(catX, catY + 12, catSize * 0.4, catX, catY + 12, auraR);
+      fireGrad.addColorStop(0, this.feverTimer > 0 ? 'rgba(45, 212, 191, 0.5)' : `rgba(253, 224, 71, ${0.38 * auraIntensity})`);
       fireGrad.addColorStop(0.55, `rgba(249, 115, 22, ${0.28 * auraIntensity})`);
       fireGrad.addColorStop(1, 'rgba(239, 68, 68, 0)');
       ctx.fillStyle = fireGrad;
       ctx.beginPath();
-      ctx.arc(cx, catY + 12, auraR, 0, Math.PI * 2);
+      ctx.arc(catX, catY + 12, auraR, 0, Math.PI * 2);
       ctx.fill();
 
-      // Flame tongues behind cat
       ctx.save();
       ctx.globalAlpha = 0.45 * auraIntensity;
       for (const side of [-1, 0, 1]) {
-        const fx = cx + side * catSize * 0.65;
+        const fx = catX + side * catSize * 0.65;
         const fh = catSize * (0.9 + auraIntensity * 0.8) * (0.85 + 0.2 * Math.sin(this.clock * 18 + side));
-        ctx.fillStyle = side === 0 ? '#fde047' : '#fb923c';
+        ctx.fillStyle = this.feverTimer > 0 ? '#2dd4bf' : side === 0 ? '#fde047' : '#fb923c';
         ctx.beginPath();
         ctx.moveTo(fx - 10, catY + 28);
         ctx.quadraticCurveTo(fx, catY + 28 - fh * 1.4, fx + 10, catY + 28);
@@ -572,8 +914,7 @@ export class ClimberStage {
       ctx.restore();
     }
 
-    // Cartoon Cat climbing upward paw-over-paw
-    drawCartoonCat(ctx, cx, catY, catSize, {
+    drawCartoonCat(ctx, catX, catY, catSize, {
       color: this.color,
       eyeColor: this.eyeColor,
       accessory: this.accessory,
@@ -583,32 +924,97 @@ export class ClimberStage {
       comboHeat: this.comboHeat,
     });
 
-    // Combo badge when streak >= 5
-    if (this.comboHeat > 0.45 && this.tapStreak >= 5) {
+    // Fever badge (top-left of canvas, strictly below HUD)
+    if (this.feverTimer > 0) {
       ctx.save();
-      ctx.font = '800 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx.fillStyle = 'rgba(45, 212, 191, 0.94)';
+      ctx.beginPath();
+      ctx.roundRect(14, 12, 122, 26, 13);
+      ctx.fill();
+      ctx.fillStyle = '#042f2e';
+      ctx.font = '900 12px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#fde047';
-      ctx.shadowColor = 'rgba(249, 115, 22, 0.8)';
-      ctx.shadowBlur = 8;
-      ctx.fillText(`🔥 x${this.tapStreak} COMBO`, cx, catY - catSize * 1.65);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`🐟 FEVER ${this.feverTimer.toFixed(1)}s`, 75, 25);
       ctx.restore();
     }
 
-    // Floating popups
+    // Combo badge (top-right of canvas, strictly below HUD)
+    if (this.tapStreak >= 4) {
+      ctx.save();
+      ctx.fillStyle = this.tapStreak >= 10 ? 'rgba(250, 204, 21, 0.94)' : 'rgba(15, 23, 42, 0.82)';
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(this.width - 110, 12, 96, 26, 13);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = this.tapStreak >= 10 ? '#042f2e' : '#fde047';
+      ctx.font = '900 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`🔥 x${this.tapStreak}`, this.width - 62, 25);
+      ctx.restore();
+    }
+
+    if (this.visualMeters < 3) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(4, 47, 46, 0.78)';
+      ctx.beginPath();
+      ctx.roundRect(cx - 130, this.height - 40, 260, 26, 13);
+      ctx.fill();
+      ctx.fillStyle = '#ccfbf1';
+      ctx.font = '700 11.5px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Tap Left/Right to climb & dodge • Catch Fish!', cx, this.height - 27);
+      ctx.restore();
+    }
+
     for (const p of this.popups) {
       const t = p.life / p.maxLife;
       ctx.save();
       ctx.globalAlpha = 1 - t;
-      ctx.font = p.isTreat
-        ? '800 18px ui-monospace, SFMono-Regular, Menlo, monospace'
-        : '800 16px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx.font = p.big
+        ? '800 17px ui-monospace, SFMono-Regular, Menlo, monospace'
+        : '800 15px ui-monospace, SFMono-Regular, Menlo, monospace';
       ctx.textAlign = 'center';
-      ctx.fillStyle = p.isTreat ? '#2dd4bf' : '#fde047';
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = 'rgba(2, 6, 23, 0.82)';
+      ctx.strokeText(p.text, p.x, p.y);
+      ctx.fillStyle = p.color;
       ctx.fillText(p.text, p.x, p.y);
       ctx.restore();
     }
 
+    ctx.restore();
+  }
+
+  private drawAcorn(ctx: CanvasRenderingContext2D, x: number, y: number, rot: number): void {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    // Nut body
+    ctx.fillStyle = '#b45309';
+    ctx.strokeStyle = '#451a03';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 4, 10, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Textured cap
+    ctx.fillStyle = '#78350f';
+    ctx.beginPath();
+    ctx.arc(0, -3, 11.5, Math.PI, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Stem
+    ctx.lineWidth = 2.8;
+    ctx.beginPath();
+    ctx.moveTo(0, -14);
+    ctx.lineTo(2, -20);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -631,7 +1037,6 @@ export class ClimberStage {
       const side = idx % 2 === 0 ? -1 : 1;
       const rx = cx + side * (railHalf + 1);
 
-      // Vine stem segment curling around rail
       ctx.strokeStyle = '#15803d';
       ctx.lineWidth = 2.6;
       ctx.beginPath();
@@ -639,7 +1044,6 @@ export class ClimberStage {
       ctx.quadraticCurveTo(rx + side * 8, y, rx - side * 3, y + 24);
       ctx.stroke();
 
-      // Sprouting leaf
       ctx.fillStyle = idx % 3 === 0 ? '#34d399' : '#22c55e';
       ctx.beginPath();
       ctx.ellipse(rx + side * 7, y - 2, 6, 3.2, side * 0.5, 0, Math.PI * 2);
@@ -652,7 +1056,6 @@ export class ClimberStage {
     ctx.save();
     ctx.translate(x, y);
 
-    // Pulsing glow halo
     const pulse = 0.5 + 0.5 * Math.sin(this.clock * 6);
     const halo = ctx.createRadialGradient(0, 0, 4, 0, 0, 24 + pulse * 5);
     halo.addColorStop(0, 'rgba(253, 224, 71, 0.55)');
@@ -663,7 +1066,6 @@ export class ClimberStage {
     ctx.arc(0, 0, 26 + pulse * 5, 0, Math.PI * 2);
     ctx.fill();
 
-    // Rotating sparkle ring
     ctx.strokeStyle = `rgba(254, 240, 138, ${0.5 + pulse * 0.35})`;
     ctx.lineWidth = 1.6;
     ctx.setLineDash([4, 5]);
@@ -675,7 +1077,6 @@ export class ClimberStage {
     ctx.restore();
     ctx.setLineDash([]);
 
-    // Orbiting mini sparkle stars
     for (let i = 0; i < 2; i++) {
       const a = this.clock * 3.2 + i * Math.PI;
       const sx = Math.cos(a) * 18;
@@ -686,7 +1087,6 @@ export class ClimberStage {
       ctx.fill();
     }
 
-    // Fish tail
     ctx.fillStyle = '#f59e0b';
     ctx.strokeStyle = '#78350f';
     ctx.lineWidth = 2;
@@ -698,7 +1098,6 @@ export class ClimberStage {
     ctx.fill();
     ctx.stroke();
 
-    // Fish body
     const fishGrad = ctx.createLinearGradient(-12, -8, 10, 8);
     fishGrad.addColorStop(0, '#fef08a');
     fishGrad.addColorStop(0.55, '#fbbf24');
@@ -709,13 +1108,11 @@ export class ClimberStage {
     ctx.fill();
     ctx.stroke();
 
-    // Gleaming highlight
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
     ctx.beginPath();
     ctx.ellipse(-4, -3, 4.5, 1.8, -0.2, 0, Math.PI * 2);
     ctx.fill();
 
-    // Eye
     ctx.fillStyle = '#1e293b';
     ctx.beginPath();
     ctx.arc(-7.5, -1.5, 1.6, 0, Math.PI * 2);
@@ -730,17 +1127,14 @@ export class ClimberStage {
     let botColor: string;
 
     if (m < 60) {
-      // Lush sunny park / garden -> crisp sky
       const t = m / 60;
       topColor = lerpColor('#0284c7', '#0369a1', t);
       botColor = lerpColor('#bae6fd', '#5eead4', t);
     } else if (m < 140) {
-      // Treetops & fluffy clouds -> sunset stratosphere
       const t = (m - 60) / 80;
       topColor = lerpColor('#0369a1', '#4c1d95', t);
       botColor = lerpColor('#5eead4', '#fb7185', t);
     } else if (m < 240) {
-      // Sunset stratosphere -> starry aurora space
       const t = (m - 140) / 100;
       topColor = lerpColor('#4c1d95', '#090d24', t);
       botColor = lerpColor('#fb7185', '#0f3443', t);
@@ -755,7 +1149,6 @@ export class ClimberStage {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, this.width, this.height);
 
-    // Warm golden sun at low altitude, fading into moon/space orb higher up
     if (m < 150) {
       const sunAlpha = Math.max(0, 1 - m / 150);
       const sunX = this.width * 0.8;
@@ -770,7 +1163,6 @@ export class ClimberStage {
       ctx.fill();
     }
 
-    // Starfield in stratosphere & aurora space (110m+)
     if (m > 110) {
       const starAlpha = Math.min(0.95, (m - 110) / 110);
       for (let i = 0; i < 40; i++) {
@@ -786,7 +1178,6 @@ export class ClimberStage {
       ctx.globalAlpha = 1;
     }
 
-    // Shimmering Aurora Borealis ribbons in space (190m+)
     if (m > 190) {
       const auroraAlpha = Math.min(0.55, ((m - 190) / 90) * 0.55);
       ctx.save();
@@ -810,7 +1201,6 @@ export class ClimberStage {
       ctx.restore();
     }
 
-    // Distant treetop silhouettes (0m to 75m)
     if (m < 75) {
       const treeOffset = m * 6;
       const treeAlpha = Math.max(0, 1 - m / 75) * 0.55;
@@ -824,7 +1214,6 @@ export class ClimberStage {
       }
     }
 
-    // Parallax fluffy clouds below 200m
     if (m < 200) {
       const cloudAlpha = Math.max(0.08, 0.44 * (1 - m / 200));
       ctx.fillStyle = m > 120 ? `rgba(254, 215, 170, ${cloudAlpha})` : `rgba(255, 255, 255, ${cloudAlpha})`;
